@@ -1,4 +1,5 @@
 # NoSQL Project: IoT Telemetry API
+### Michael Kocovic, Alex Cheung
 
 A simple Flask-based API that receives telemetry from devices, caches recent telemetry in Redis, and periodically syncs grouped device data to MongoDB. Includes endpoints to query current Redis cache and persisted groups from MongoDB.
 
