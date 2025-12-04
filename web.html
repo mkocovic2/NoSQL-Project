@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IoT Telemetry Dashboard</title>
+    <style>
+        body {
+            font-family: monospace;
+            background: #f4f4f4;
+            color: #222;
+            padding: 20px;
+        }
+
+        h1 {
+            font-size: 1.5em;
+            margin-bottom: 10px;
+        }
+
+        .status {
+            margin-bottom: 10px;
+        }
+
+        .status.error {
+            color: red;
+        }
+
+        .device {
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 15px;
+            background: #fff;
+        }
+
+        .device-id {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .data-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9em;
+            padding: 2px 0;
+        }
+
+        .timestamp {
+            font-size: 0.8em;
+            color: #555;
+            margin-top: 5px;
+        }
+
+        .no-data {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <h1>IoT Telemetry Dashboard</h1>
+    <div class="status" id="status">Connecting...</div>
+    <div>Auto-refreshing every 2 seconds</div>
+    <div id="devices"></div>
+
+    <script>
+        const API_URL = '';
+        let previousData = {};
+
+        async function fetchTelemetry() {
+            try {
+                const response = await fetch(`${API_URL}/telemetry`, {
+                    headers: { 'ngrok-skip-browser-warning': 'true' }
+                });
+
+                if (!response.ok) throw new Error(`Server error ${response.status}`);
+
+                const text = await response.text();
+                const devices = JSON.parse(text);
+
+                document.getElementById('status').textContent = 'Connected';
+                document.getElementById('status').className = 'status';
+                displayDevices(devices);
+
+            } catch (err) {
+                document.getElementById('status').textContent = 'Disconnected - ' + err.message;
+                document.getElementById('status').className = 'status error';
+                document.getElementById('devices').innerHTML =
+                    `<div class="no-data">Cannot connect to server<br>${err.message}</div>`;
+            }
+        }
+
+        function displayDevices(devices) {
+            const container = document.getElementById('devices');
+            if (!devices || devices.length === 0) {
+                container.innerHTML = '<div class="no-data">No telemetry data available</div>';
+                return;
+            }
+
+            container.innerHTML = devices.map(device => {
+                const deviceId = device.device_id || 'Unknown';
+                previousData[deviceId] = device;
+
+                const fields = Object.entries(device)
+                    .filter(([k]) => !['_id', 'device_id', 'timestamp'].includes(k))
+                    .map(([k, v]) => `
+                        <div class="data-row">
+                            <span>${k}</span>
+                            <span>${v}</span>
+                        </div>
+                    `).join('');
+
+                const timestamp = device.timestamp
+                    ? new Date(device.timestamp).toLocaleString()
+                    : 'No timestamp';
+
+                return `
+                    <div class="device">
+                        <div class="device-id">${deviceId}</div>
+                        ${fields}
+                        <div class="timestamp">Last update: ${timestamp}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        setInterval(fetchTelemetry, 2000);
+        fetchTelemetry();
+    </script>
+</body>
+</html>
