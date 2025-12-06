@@ -15,24 +15,34 @@ CORS(app)
 uri = ""
 client = None
 db = None
-collection = None
 
 try:
     client = MongoClient(uri, server_api=ServerApi('1'))
     client.admin.command('ping')
     print("Pinged your deployment. You successfully connected to MongoDB!")
     db = client['iot_database']
-    collection = db['device_groups']
-    collection.create_index('group_id', unique=True)
 except Exception as e:
     print(f"MongoDB connection failed: {e}")
     print("Server will start but database operations will fail!")
 
 # Redis setup, use optional server if needed. Default is localhost.
-redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+redis_client = redis.Redis(
+    host='',
+    port=13257,
+    decode_responses=True,
+    username="",
+    password="",
+)
 
 def redis_key(group_id, device_id):
     return f"telemetry:{group_id}:{device_id}"
+
+def get_collection(group_id):
+    if db is None:
+        return None
+    collection = db[f"group_{group_id}"]
+    collection.create_index('device_id', unique=True)
+    return collection
 
 @app.route('/telemetry', methods=['POST'])
 def receive_telemetry():
@@ -65,7 +75,55 @@ def receive_telemetry():
 
     except Exception as e:
         print(f"Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 
+
+@app.route('/telemetry/mongo', methods=['POST'])
+def receive_telemetry_mongo():
+    try:
+        data = request.get_json()
+        timestamp = datetime.utcnow()
+
+        device_id = data.get('device_id')
+        group_id = data.get('group_id')
+        device_type = data.get('device_type')
+
+        if not device_id or not group_id:
+            return jsonify({"status": "error", "message": "device_id and group_id required"}), 400
+
+        collection = get_collection(group_id)
+        if collection is None:
+            return jsonify({"status": "error", "message": "Database not connected"}), 503
+
+        # Insert/update in MongoDB
+        collection.update_one(
+            {'device_id': device_id},
+            {
+                '$set': {
+                    'device_id': device_id,
+                    'group_id': group_id,
+                    'device_type': device_type,
+                    'status': "online",
+                    'timestamp': timestamp.isoformat(),
+                    'last_updated': timestamp,
+                    'telemetry': data
+                },
+                '$setOnInsert': {
+                    'created_at': timestamp
+                }
+            },
+            upsert=True
+        )
+
+        return jsonify({
+            "status": "success",
+            "message": "Telemetry stored directly in MongoDB",
+            "group_id": group_id,
+            "device_id": device_id
+        }), 200
+
+    except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
 
 @app.route('/redis', methods=['GET'])
 def get_redis_data():
@@ -104,21 +162,27 @@ def sync_redis_to_mongo():
             # Update MongoDB
             for group_id, devices in group_devices.items():
                 timestamp = datetime.utcnow()
+                collection = get_collection(group_id)
                 if collection is not None:
-                    collection.update_one(
-                        {'group_id': group_id},
-                        {
-                            '$set': {
-                                'group_id': group_id,
-                                'last_updated': timestamp,
-                                'devices': devices
+                    for device in devices:
+                        collection.update_one(
+                            {'device_id': device['device_id']},
+                            {
+                                '$set': {
+                                    'device_id': device['device_id'],
+                                    'group_id': group_id,
+                                    'device_type': device.get('device_type'),
+                                    'status': device.get('status'),
+                                    'timestamp': device.get('timestamp'),
+                                    'last_updated': timestamp,
+                                    'telemetry': device
+                                },
+                                '$setOnInsert': {
+                                    'created_at': timestamp
+                                }
                             },
-                            '$setOnInsert': {
-                                'created_at': timestamp
-                            }
-                        },
-                        upsert=True
-                    )
+                            upsert=True
+                        )
                     print(f"Synced group {group_id} with {len(devices)} devices to MongoDB")
             # Clear Redis
             for key in keys:
@@ -128,16 +192,24 @@ def sync_redis_to_mongo():
             print(f"Redis-to-Mongo sync error: {e}")
         time.sleep(3600)  # Wait 1 hour
 
-# Start background sync thread
 sync_thread = threading.Thread(target=sync_redis_to_mongo, daemon=True)
 sync_thread.start()
 
 @app.route('/groups', methods=['GET'])
 def get_groups():
-    if collection is None:
+    if db is None:
         return jsonify({"status": "error", "message": "Database not connected"}), 503
     try:
-        groups = list(collection.find({}, {'_id': 0}))
+        collection_names = db.list_collection_names()
+        group_names = [name.replace('group_', '') for name in collection_names if name.startswith('group_')]
+        groups = []
+        for group_id in group_names:
+            collection = db[f"group_{group_id}"]
+            device_count = collection.count_documents({})
+            groups.append({
+                'group_id': group_id,
+                'device_count': device_count
+            })
         return jsonify({
             "status": "success",
             "count": len(groups),
@@ -148,26 +220,32 @@ def get_groups():
 
 @app.route('/groups/<group_id>', methods=['GET'])
 def get_group(group_id):
-    if collection is None:
+    if db is None:
         return jsonify({"status": "error", "message": "Database not connected"}), 503
     try:
-        group = collection.find_one({'group_id': group_id}, {'_id': 0})
-        if group:
-            return jsonify({
-                "status": "success",
-                "group": group
-            }), 200
+        collection = get_collection(group_id)
+        if collection is not None:
+            devices = list(collection.find({}, {'_id': 0}))
+            if devices:
+                return jsonify({
+                    "status": "success",
+                    "group_id": group_id,
+                    "device_count": len(devices),
+                    "devices": devices
+                }), 200
+            else:
+                return jsonify({
+                    "status": "error",
+                    "message": "Group not found"
+                }), 404
         else:
-            return jsonify({
-                "status": "error",
-                "message": "Group not found"
-            }), 404
+            return jsonify({"status": "error", "message": "Database not connected"}), 503
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/health', methods=['GET', 'POST'])
 def health():
-    if collection is None:
+    if db is None:
         return jsonify({"status": "error", "message": "Database not connected"}), 503
     if request.method == 'POST':
         return receive_telemetry()
