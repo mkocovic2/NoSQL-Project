@@ -41,7 +41,14 @@ def get_collection(group_id):
     if db is None:
         return None
     collection = db[f"group_{group_id}"]
+    
+    # Create multiple indexes for optimized queries
     collection.create_index('device_id', unique=True)
+    collection.create_index('status')
+    collection.create_index('device_type')
+    collection.create_index('last_updated')
+    collection.create_index('timestamp')
+    
     return collection
 
 @app.route('/telemetry', methods=['POST'])
@@ -75,7 +82,7 @@ def receive_telemetry():
 
     except Exception as e:
         print(f"Error: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/telemetry/mongo', methods=['POST'])
 def receive_telemetry_mongo():
@@ -144,6 +151,7 @@ def get_redis_data():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 def sync_redis_to_mongo():
+    """Continuously syncs Redis telemetry to MongoDB every hour"""
     while True:
         try:
             print("Syncing Redis telemetry to MongoDB...")
@@ -159,6 +167,7 @@ def sync_redis_to_mongo():
                         if group_id not in group_devices:
                             group_devices[group_id] = []
                         group_devices[group_id].append(telemetry)
+            
             # Update MongoDB
             for group_id, devices in group_devices.items():
                 timestamp = datetime.utcnow()
@@ -184,14 +193,18 @@ def sync_redis_to_mongo():
                             upsert=True
                         )
                     print(f"Synced group {group_id} with {len(devices)} devices to MongoDB")
+            
             # Clear Redis
             for key in keys:
                 redis_client.delete(key)
             print("Redis telemetry cleared after sync")
+            
         except Exception as e:
             print(f"Redis-to-Mongo sync error: {e}")
-        time.sleep(3600)  # Wait 1 hour
+        
+        time.sleep(3600)  # Wait 1 hour before next sync
 
+# Start the continuous Redis-to-MongoDB sync thread
 sync_thread = threading.Thread(target=sync_redis_to_mongo, daemon=True)
 sync_thread.start()
 
