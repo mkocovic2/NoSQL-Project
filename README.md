@@ -257,3 +257,15 @@ db.group_net_192_168_1_1.aggregate([
   { $group: { _id: "$device_type", count: { $sum: 1 } } }
 ])
 ```
+
+### Complete Endpoint List
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/telemetry` | Primary endpoint for device telemetry. Stores data in Redis cache for high-throughput writes. Data persists to MongoDB during hourly sync. |
+| `POST` | `/telemetry/mongo` | Direct MongoDB write, bypassing Redis. Use for critical data requiring immediate persistence. |
+| `GET` | `/redis` | Retrieves all telemetry currently cached in Redis. Shows real-time device data before hourly sync. |
+| `GET` | `/groups` | Lists all device groups (locations) with device counts. Shows MongoDB collections starting with `group_`. |
+| `GET` | `/groups/<group_id>` | Retrieves all devices and their latest telemetry for a specific group. Returns complete device state from MongoDB. |
+| `GET` | `/health` | Health check endpoint. Returns `{"status": "ok"}` if server and database connections are healthy. |
+| `POST` | `/health` | Alias for `POST /telemetry`. Alternative endpoint for posting telemetry data. |
